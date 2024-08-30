@@ -32,20 +32,23 @@ node index.js
 
 ## Usage
 
-### Creating a message
-To create a message, send a POST request to the `/create` endpoint with the message in the body. The response will contain the ID of the message.
+### Creating a Room
+To create a room, send a POST request to the `/room/create` endpoint with the userId, type (optional, default is 'public'), and password (required for private rooms) parameters in the request body. The response will contain the created room's ID.
 
-### Retrieving a message
-To retrieve a message, send a GET request to the `/view` endpoint with the ID of the message in the URL. The response will contain the encrypted message.
+### Joining a Room
+To join a room, send a POST request to the `/room/join` endpoint with the roomId, userId, and password (required for private rooms) parameters in the request body. The response will contain a message indicating the success of the join operation.
 
-### Creating a room
-To create a room, send a POST request to the `/room/create` endpoint with the room name in the body. The response will contain the ID of the room.
+### Leaving a Room
+To leave a room, send a POST request to the `/room/leave` endpoint with the roomId and userId parameters in the request body. The response will contain a message indicating the success of the leave operation.
 
-### Joining a room
-To join a room, send a POST request to the `/room/join` endpoint with the room ID in the body. The response will contain the ID of the room.
+### Sending a Message
+To send a message to a room, send a POST request to the `/room/message` endpoint with the roomId, userId, and message parameters in the request body. The response will contain a message indicating the success of the message sending operation.
 
-### Leaving a room
-To leave a room, send a POST request to the `/room/leave` endpoint with the room ID in the body. The response will contain the ID of the room.
+### Getting Messages
+To get the messages of a specific room, send a GET request to the `/room/:roomId/messages` endpoint. The response will contain the decrypted messages of the room.
+
+### Error Handling
+If an error occurs, the server will return an appropriate HTTP status code and error message in the response body.
 
 ### Warning
 Remember, messages are deleted every 2 hours.

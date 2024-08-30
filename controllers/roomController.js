@@ -13,13 +13,13 @@ async function generateRoomCode() {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
     do {
-      roomCode = '';
+        roomCode = '';
 
-      for (let i = 0; i < 20; i++) {
-          roomCode += characters.charAt(Math.floor(Math.random() * characters.length));
-      }
+        for (let i = 0; i < 20; i++) {
+            roomCode += characters.charAt(Math.floor(Math.random() * characters.length));
+        }
 
-      roomExists = await isRoomExists(roomCode);
+        roomExists = await isRoomExists(roomCode);
     } while (roomExists);
 
     return roomCode;
@@ -27,52 +27,66 @@ async function generateRoomCode() {
 
 /**
  * Checks roomId's existence.
- * 
- * @param {string} roomId 
+ *
+ * @param {string} roomId
  * @returns {boolean}
  */
 async function isRoomExists(roomId) {
-    const result = await db.get(`room.${roomId}`);
-    return result ? true : false;
+    const result = await db.get(`rooms.${roomId}`);
+    return !!result;
 }
 
 /**
- * Creates a new room and adds the user to it.
+ * Creates a new room.
  *
- * @param {Object} req - The request object containing the user ID.
- * @param {Object} res - The response object used to send the created room ID.
- * @return {Promise<void>} - Resolves with the created room ID if successful, or an error message if room creation fails.
+ * @param {Object} req - The request object containing the room code, user ID, and password (if applicable).
+ * @param {Object} res - The response object used to send the result of the room creation operation.
+ * @return {Promise<void>} - Resolves with a JSON response indicating the success of the room creation operation.
  */
 exports.createRoom = async (req, res) => {
     try {
         const roomId = await generateRoomCode();
-        const { userId } = req.body;
+        const { userId, type, password } = req.body;
 
-        const roomData = await db.get(`rooms.${roomId}`);
-        if (roomData) {
-            const room = JSON.parse(roomData);
-            if (room.users.includes(userId)) {
-                return res.status(409).json({ error: 'User already in room' });
-            }
+        if (userId.toLowerCase() === "system") {
+            return res.status(400).json({ error: "Username 'System' is not allowed" });
         }
 
-        await db.set(`rooms.${roomId}`, JSON.stringify({ users: [userId], messages: [] }));
+        const roomInfo = {
+            users: [userId, "System"],
+            messages: [],
+            type: type || 'public'
+        };
+
+        if (type === 'private') {
+            if (!password) {
+                return res.status(400).json({ error: 'Password is required for private rooms' });
+            }
+            roomInfo.password = await encrypt(password);
+        }
+
+        await db.set(`rooms.${roomId}`, JSON.stringify(roomInfo));
 
         res.status(201).json({ roomId: roomId });
     } catch (error) {
-        res.status(404).json({ error: "Room creation failed" });
+        res.status(500).json({ error: "Room creation failed" });
     }
 };
 
+
 /**
- * Joins a user to a room.
+ * Joins a room.
  *
- * @param {Object} req - The request object containing the room ID and user ID.
+ * @param {Object} req - The request object containing the room ID, user ID, and password (if applicable).
  * @param {Object} res - The response object used to send the result of the join operation.
  * @return {Promise<void>} - Resolves with a JSON response indicating the success of the join operation.
  */
 exports.joinRoom = async (req, res) => {
-    const { roomId, userId } = req.body;
+    const { roomId, userId, password } = req.body;
+
+    if (userId.toLowerCase() === "System") {
+        return res.status(400).json({ error: "Username 'System' is not allowed" });
+    }
 
     const roomData = await db.get(`rooms.${roomId}`);
     if (!roomData) {
@@ -81,7 +95,14 @@ exports.joinRoom = async (req, res) => {
 
     const room = JSON.parse(roomData);
     if (room.users.includes(userId)) {
-        return res.status(409).json({ error: 'User already in room' });
+        return res.status(200).json({ message: 'User already in room' });
+    }
+
+    if (room.type === 'private') {
+        const decryptedPassword = await decrypt(room.password);
+        if (password !== decryptedPassword) {
+            return res.status(403).json({ error: 'Invalid password' });
+        }
     }
 
     room.users.push(userId);
@@ -91,7 +112,7 @@ exports.joinRoom = async (req, res) => {
 };
 
 /**
- * Leaves a user from a room.
+ * Leaves a room.
  *
  * @param {Object} req - The request object containing the room ID and user ID.
  * @param {Object} res - The response object used to send the result of the leave operation.
@@ -122,6 +143,10 @@ exports.leaveRoom = async (req, res) => {
 exports.sendMessage = async (req, res) => {
     const { roomId, userId, message } = req.body;
 
+    if (userId.toLowerCase() === "System") {
+        return res.status(400).json({ error: "Username 'System' is not allowed" });
+    }
+
     try {
         const roomData = await db.get(`rooms.${roomId}`);
 
@@ -146,11 +171,11 @@ exports.sendMessage = async (req, res) => {
 };
 
 /**
- * Retrieves the messages from a specific room.
+ * Gets all messages in a room.
  *
  * @param {Object} req - The request object containing the room ID.
- * @param {Object} res - The response object used to send the messages.
- * @return {Promise<void>} - Resolves with a JSON response containing the messages.
+ * @param {Object} res - The response object used to send the result of the message fetching operation.
+ * @return {Promise<void>} - Resolves with a JSON response containing the messages in the room.
  */
 exports.getMessages = async (req, res) => {
     const { roomId } = req.params;
