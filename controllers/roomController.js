@@ -112,6 +112,27 @@ exports.joinRoom = async (req, res) => {
 };
 
 /**
+ * Checks if a room exists.
+ *
+ * @param {Object} req - The request object containing the room ID.
+ * @param {Object} res - The response object used to send the result of the room check operation.
+ * @return {Promise<void>} - Resolves with a JSON response indicating the success of the room check operation.
+ */
+ exports.checkRoom = async (req, res) => {
+     const { roomId } = req.params;
+     const roomData = await db.get(`rooms.${roomId}`);
+     if (!roomData) {
+        return res.status(404).json({ error: 'Room not found' });
+     }
+
+     const room = JSON.parse(roomData);
+     if (room.password) {
+        delete room.password;
+     }
+     res.status(200).json({ room });
+ };
+
+/**
  * Leaves a room.
  *
  * @param {Object} req - The request object containing the room ID and user ID.
