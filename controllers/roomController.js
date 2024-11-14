@@ -186,3 +186,63 @@ exports.getMessages = async (req, res) => {
         res.status(500).json({ error: 'Failed to get messages' });
     }
 };
+
+exports.listAllRooms = async (req, res) => {
+    try {
+        const { type, minUsers, sort } = req.query;
+        
+        const rooms = await db.all();
+        
+        let filteredRooms = rooms.map(room => {
+            const roomData = JSON.parse(room.data);
+            return {
+                ID: room.ID.split('.')[1],
+                type: roomData.type,
+                userCount: roomData.users.length,
+                messageCount: roomData.messages.length,
+                createdAt: roomData.createdAt || new Date().toISOString(),
+                lastActivity: roomData.lastActivity || roomData.createdAt || new Date().toISOString(),
+                isEmpty: roomData.users.length <= 1
+            };
+        });
+
+        if (type && !['public', 'private'].includes(type)) {
+            return res.status(400).json({ error: 'Invalid room type' });
+        }
+
+        if (type) {
+            filteredRooms = filteredRooms.filter(room => room.type === type);
+        }
+
+        if (minUsers) {
+            const validatedMinUsers = Math.max(1, parseInt(minUsers) || 1);
+            filteredRooms = filteredRooms.filter(room => room.userCount >= validatedMinUsers);
+        }
+
+        const validSortOptions = ['users', 'messages', 'newest', 'activity'];
+        if (sort && !validSortOptions.includes(sort)) {
+            return res.status(400).json({ error: 'Invalid sort option' });
+        }
+
+        if (sort) {
+            switch (sort) {
+                case 'users':
+                    filteredRooms.sort((a, b) => b.userCount - a.userCount);
+                    break;
+                case 'messages':
+                    filteredRooms.sort((a, b) => b.messageCount - a.messageCount);
+                    break;
+                case 'newest':
+                    filteredRooms.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+                    break;
+                case 'activity':
+                    filteredRooms.sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity));
+                    break;
+            }
+        }
+
+        res.status(200).json({ rooms: filteredRooms });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to list rooms. Please try again later.' });
+    }
+};
