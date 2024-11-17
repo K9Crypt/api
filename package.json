@@ -1,14 +1,25 @@
 {
   "name": "k9crypt-api",
   "version": "1.0.0",
-  "description": "",
+  "description": "Secure real-time chat application API with end-to-end encryption, room management, and message persistence",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "chat",
+    "encryption",
+    "real-time",
+    "socket.io",
+    "secure-messaging",
+    "end-to-end-encryption",
+    "room-management",
+    "api",
+    "nodejs",
+    "express"
+  ],
+  "author": "K9Crypt",
+  "license": "MIT",
   "dependencies": {
     "@st.db/mongodb": "^1.0.0",
     "body-parser": "^1.20.3",
@@ -21,6 +32,8 @@
     "socket.io": "^4.8.1",
     "st.db": "^7.2.10",
     "uuid": "^10.0.0",
+    "validator": "^13.12.0",
+    "winston": "^3.17.0",
     "xss": "^1.0.15"
   }
 }

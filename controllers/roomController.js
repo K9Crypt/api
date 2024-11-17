@@ -1,6 +1,14 @@
 const { v4: uuidv4 } = require('uuid');
 const db = require('../database/db');
 const { encrypt, decrypt } = require('../utils/encryption');
+const logger = require('../utils/logger');
+const { validateRoomInput, sanitizeInput } = require('../utils/validation');
+
+const ROOM_CONSTANTS = {
+    MAX_USERS: 1000,
+    MIN_PASSWORD_LENGTH: 6,
+    ROOM_CODE_LENGTH: 20
+};
 
 async function generateRoomCode() {
     try {
@@ -9,56 +17,71 @@ async function generateRoomCode() {
         const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
         do {
-            roomCode = '';
-
-            for (let i = 0; i < 20; i++) {
-                roomCode += characters.charAt(Math.floor(Math.random() * characters.length));
-            }
+            roomCode = Array(ROOM_CONSTANTS.ROOM_CODE_LENGTH)
+                .fill()
+                .map(() => characters.charAt(Math.floor(Math.random() * characters.length)))
+                .join('');
 
             roomExists = await isRoomExists(roomCode);
         } while (roomExists);
 
         return roomCode;
     } catch (error) {
-        throw error;
+        logger.error('Error generating room code:', error);
+        throw new Error('Failed to generate room code');
     }
 }
 
 async function isRoomExists(roomId) {
     try {
+        if (!roomId || typeof roomId !== 'string') {
+            throw new Error('Invalid room ID');
+        }
         const result = await db.get(`rooms.${roomId}`);
         return !!result;
     } catch (error) {
+        logger.error('Error checking room existence:', error);
         throw error;
     }
 }
 
 exports.createRoom = async (req, res) => {
     try {
-        const roomId = await generateRoomCode();
         const { userId, type, password } = req.body;
 
-        if (userId.toLowerCase() === "system") {
+        if (!validateRoomInput({ userId, type, password })) {
+            return res.status(400).json({ error: 'Invalid input parameters' });
+        }
+
+        const sanitizedUserId = sanitizeInput(userId);
+        if (sanitizedUserId.toLowerCase() === "system") {
             return res.status(400).json({ error: "Username 'System' is not allowed" });
         }
 
+        const roomId = await generateRoomCode();
         const roomInfo = {
-            users: [userId, "System"],
+            users: [sanitizedUserId, "System"],
             messages: [],
-            type: type || 'public'
+            type: type || 'public',
+            createdAt: new Date().toISOString(),
+            lastActivity: new Date().toISOString()
         };
 
         if (type === 'private') {
-            if (!password) {
-                return res.status(400).json({ error: 'Password is required for private rooms' });
+            if (!password || password.length < ROOM_CONSTANTS.MIN_PASSWORD_LENGTH) {
+                return res.status(400).json({
+                    error: `Password must be at least ${ROOM_CONSTANTS.MIN_PASSWORD_LENGTH} characters long`
+                });
             }
             roomInfo.password = await encrypt(password);
         }
 
         await db.set(`rooms.${roomId}`, JSON.stringify(roomInfo));
+        logger.info(`Room created: ${roomId}`);
 
-        res.status(201).json({ roomId: roomId });
+        res.status(201).json({ roomId });
     } catch (error) {
+        logger.error('Error creating room:', error);
         res.status(500).json({ error: "Room creation failed" });
     }
 };
@@ -67,7 +90,12 @@ exports.joinRoom = async (req, res) => {
     try {
         const { roomId, userId, password } = req.body;
 
-        if (userId.toLowerCase() === "System") {
+        if (!roomId || !userId) {
+            return res.status(400).json({ error: 'Room ID and user ID are required' });
+        }
+
+        const sanitizedUserId = sanitizeInput(userId);
+        if (sanitizedUserId.toLowerCase() === "system") {
             return res.status(400).json({ error: "Username 'System' is not allowed" });
         }
 
@@ -77,60 +105,34 @@ exports.joinRoom = async (req, res) => {
         }
 
         const room = JSON.parse(roomData);
-        if (room.users.includes(userId)) {
+
+        if (room.users.length >= ROOM_CONSTANTS.MAX_USERS) {
+            return res.status(403).json({ error: 'Room is full' });
+        }
+
+        if (room.users.includes(sanitizedUserId)) {
             return res.status(200).json({ message: 'User already in room' });
         }
 
         if (room.type === 'private') {
+            if (!password) {
+                return res.status(403).json({ error: 'Password required for private room' });
+            }
             const decryptedPassword = await decrypt(room.password);
             if (password !== decryptedPassword) {
                 return res.status(403).json({ error: 'Invalid password' });
             }
         }
 
-        room.users.push(userId);
+        room.users.push(sanitizedUserId);
+        room.lastActivity = new Date().toISOString();
         await db.set(`rooms.${roomId}`, JSON.stringify(room));
 
+        logger.info(`User ${sanitizedUserId} joined room ${roomId}`);
         res.status(200).json({ message: 'Joined room successfully' });
     } catch (error) {
+        logger.error('Error joining room:', error);
         res.status(500).json({ error: 'Failed to join room' });
-    }
-};
-
-exports.checkRoom = async (req, res) => {
-    try {
-        const { roomId } = req.params;
-        const roomData = await db.get(`rooms.${roomId}`);
-        if (!roomData) {
-            return res.status(404).json({ error: 'Room not found' });
-        }
-
-        const room = JSON.parse(roomData);
-        if (room.password) {
-            delete room.password;
-        }
-        res.status(200).json({ room });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to check room' });
-    }
-};
-
-exports.leaveRoom = async (req, res) => {
-    try {
-        const { roomId, userId } = req.body;
-
-        const roomData = await db.get(`rooms.${roomId}`);
-        if (!roomData) {
-            return res.status(404).json({ error: 'Room not found' });
-        }
-
-        const room = JSON.parse(roomData);
-        room.users = room.users.filter(id => id !== userId);
-        await db.set(`rooms.${roomId}`, JSON.stringify(room));
-
-        res.status(200).json({ message: 'Left room successfully' });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to leave room' });
     }
 };
 
@@ -138,27 +140,48 @@ exports.sendMessage = async (req, res) => {
     try {
         const { roomId, userId, message } = req.body;
 
-        if (userId.toLowerCase() === "System") {
+        if (!roomId || !userId || !message) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        const sanitizedUserId = sanitizeInput(userId);
+        if (sanitizedUserId.toLowerCase() === "system") {
             return res.status(400).json({ error: "Username 'System' is not allowed" });
         }
 
         const roomData = await db.get(`rooms.${roomId}`);
-
         if (!roomData) {
             return res.status(404).json({ error: 'Room not found' });
         }
 
         const room = JSON.parse(roomData);
-        if (!room.users.includes(userId)) {
+        if (!room.users.includes(sanitizedUserId)) {
             return res.status(403).json({ error: 'User not in room' });
         }
 
-        const encryptedMessage = await encrypt(message);
-        room.messages.push({ userId, message: encryptedMessage });
+        const sanitizedMessage = sanitizeInput(message);
+        const encryptedMessage = await encrypt(sanitizedMessage);
+        const messageObj = {
+            id: uuidv4(),
+            userId: sanitizedUserId,
+            message: encryptedMessage,
+            timestamp: new Date().toISOString()
+        };
+
+        room.messages.push(messageObj);
+        room.lastActivity = new Date().toISOString();
         await db.set(`rooms.${roomId}`, JSON.stringify(room));
-        global.io.to(roomId).emit('newMessage', { sender: userId, message: encryptedMessage });
+
+        global.io.to(roomId).emit('newMessage', {
+            id: messageObj.id,
+            sender: sanitizedUserId,
+            message: encryptedMessage,
+            timestamp: messageObj.timestamp
+        });
+
         return res.status(200).json({ message: 'Message sent successfully' });
     } catch (error) {
+        logger.error('Error sending message:', error);
         return res.status(500).json({ error: 'Message sending failed' });
     }
 };
@@ -166,6 +189,11 @@ exports.sendMessage = async (req, res) => {
 exports.getMessages = async (req, res) => {
     try {
         const { roomId } = req.params;
+        const { limit = 50, before } = req.query;
+
+        if (!roomId) {
+            return res.status(400).json({ error: 'Room ID is required' });
+        }
 
         const roomData = await db.get(`rooms.${roomId}`);
         if (!roomData) {
@@ -173,30 +201,40 @@ exports.getMessages = async (req, res) => {
         }
 
         const room = JSON.parse(roomData);
+        let messages = room.messages;
 
-        const messages = await Promise.all(
-            room.messages.map(async message => ({
+        if (before) {
+            messages = messages.filter(msg => new Date(msg.timestamp) < new Date(before));
+        }
+
+        messages = messages.slice(-Math.min(parseInt(limit), 50));
+
+        const decryptedMessages = await Promise.all(
+            messages.map(async message => ({
+                id: message.id,
                 userId: message.userId,
-                message: await decrypt(message.message)
+                message: await decrypt(message.message),
+                timestamp: message.timestamp
             }))
         );
 
-        res.status(200).json({ messages });
+        res.status(200).json({ messages: decryptedMessages });
     } catch (error) {
+        logger.error('Error getting messages:', error);
         res.status(500).json({ error: 'Failed to get messages' });
     }
 };
 
 exports.listAllRooms = async (req, res) => {
     try {
-        const { type, minUsers, sort } = req.query;
-        
+        const { type, minUsers, sort, page = 1, limit = 20 } = req.query;
+
         const rooms = await db.all();
-        
+
         let filteredRooms = rooms.map(room => {
             const roomData = JSON.parse(room.data);
             return {
-                ID: room.ID.split('.')[1],
+                id: room.ID.split('.')[1],
                 type: roomData.type,
                 userCount: roomData.users.length,
                 messageCount: roomData.messages.length,
@@ -241,8 +279,84 @@ exports.listAllRooms = async (req, res) => {
             }
         }
 
-        res.status(200).json({ rooms: filteredRooms });
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(50, Math.max(1, parseInt(limit)));
+        const startIndex = (pageNum - 1) * limitNum;
+        const endIndex = startIndex + limitNum;
+        const paginatedRooms = filteredRooms.slice(startIndex, endIndex);
+
+        res.status(200).json({
+            rooms: paginatedRooms,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: filteredRooms.length,
+                totalPages: Math.ceil(filteredRooms.length / limitNum)
+            }
+        });
     } catch (error) {
+        logger.error('Error listing rooms:', error);
         res.status(500).json({ error: 'Failed to list rooms. Please try again later.' });
+    }
+};
+
+exports.checkRoom = async (req, res) => {
+    try {
+        const { roomId } = req.params;
+
+        if (!roomId) {
+            return res.status(400).json({ error: 'Room ID is required' });
+        }
+
+        const roomData = await db.get(`rooms.${roomId}`);
+        if (!roomData) {
+            return res.status(404).json({ error: 'Room not found' });
+        }
+
+        const room = JSON.parse(roomData);
+        const safeRoom = {
+            type: room.type,
+            userCount: room.users.length,
+            messageCount: room.messages.length,
+            createdAt: room.createdAt,
+            lastActivity: room.lastActivity,
+            isEmpty: room.users.length <= 1
+        };
+
+        res.status(200).json({ room: safeRoom });
+    } catch (error) {
+        logger.error('Error checking room:', error);
+        res.status(500).json({ error: 'Failed to check room' });
+    }
+};
+
+exports.leaveRoom = async (req, res) => {
+    try {
+        const { roomId, userId } = req.body;
+
+        if (!roomId || !userId) {
+            return res.status(400).json({ error: 'Room ID and user ID are required' });
+        }
+
+        const sanitizedUserId = sanitizeInput(userId);
+        const roomData = await db.get(`rooms.${roomId}`);
+        if (!roomData) {
+            return res.status(404).json({ error: 'Room not found' });
+        }
+
+        const room = JSON.parse(roomData);
+        if (!room.users.includes(sanitizedUserId)) {
+            return res.status(400).json({ error: 'User not in room' });
+        }
+
+        room.users = room.users.filter(id => id !== sanitizedUserId);
+        room.lastActivity = new Date().toISOString();
+        await db.set(`rooms.${roomId}`, JSON.stringify(room));
+
+        logger.info(`User ${sanitizedUserId} left room ${roomId}`);
+        res.status(200).json({ message: 'Left room successfully' });
+    } catch (error) {
+        logger.error('Error leaving room:', error);
+        res.status(500).json({ error: 'Failed to leave room' });
     }
 };
