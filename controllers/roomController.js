@@ -62,6 +62,7 @@ exports.createRoom = async (req, res) => {
         const roomInfo = {
             users: [sanitizedUserId, "System"],
             messages: [],
+            typingUsers: [],
             type: type || 'public',
             createdAt: new Date().toISOString(),
             lastActivity: new Date().toISOString()
@@ -111,7 +112,7 @@ exports.joinRoom = async (req, res) => {
         }
 
         if (room.users.includes(sanitizedUserId)) {
-            return res.status(200).json({ message: 'User already in room' });
+            return res.status(400).json({ error: 'Username already taken in this room' });
         }
 
         if (room.type === 'private') {
@@ -165,7 +166,9 @@ exports.sendMessage = async (req, res) => {
             id: uuidv4(),
             userId: sanitizedUserId,
             message: encryptedMessage,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            readBy: [sanitizedUserId],
+            reactions: {}
         };
 
         room.messages.push(messageObj);
@@ -176,7 +179,9 @@ exports.sendMessage = async (req, res) => {
             id: messageObj.id,
             sender: sanitizedUserId,
             message: encryptedMessage,
-            timestamp: messageObj.timestamp
+            timestamp: messageObj.timestamp,
+            readBy: messageObj.readBy,
+            reactions: messageObj.reactions
         });
 
         return res.status(200).json({ message: 'Message sent successfully' });
@@ -214,7 +219,9 @@ exports.getMessages = async (req, res) => {
                 id: message.id,
                 userId: message.userId,
                 message: await decrypt(message.message),
-                timestamp: message.timestamp
+                timestamp: message.timestamp,
+                readBy: message.readBy,
+                reactions: message.reactions
             }))
         );
 
@@ -348,15 +355,151 @@ exports.leaveRoom = async (req, res) => {
         if (!room.users.includes(sanitizedUserId)) {
             return res.status(400).json({ error: 'User not in room' });
         }
-
+        
         room.users = room.users.filter(id => id !== sanitizedUserId);
+        if (room.typingUsers) {
+            room.typingUsers = room.typingUsers.filter(id => id !== sanitizedUserId);
+        }
         room.lastActivity = new Date().toISOString();
+
+        const systemMessage = {
+            id: uuidv4(),
+            userId: 'System',
+            message: await encrypt(`${sanitizedUserId} has left the room`),
+            timestamp: new Date().toISOString(),
+            type: 'system'
+        };
+        room.messages.push(systemMessage);
+
         await db.set(`rooms.${roomId}`, JSON.stringify(room));
+
+        global.io.to(roomId).emit('newMessage', {
+            id: systemMessage.id,
+            sender: 'System',
+            message: systemMessage.message,
+            timestamp: systemMessage.timestamp,
+            type: 'system'
+        });
+
+        global.io.to(roomId).emit('typingStatus', {
+            userId: sanitizedUserId,
+            isTyping: false,
+            typingUsers: room.typingUsers
+        });
 
         logger.info(`User ${sanitizedUserId} left room ${roomId}`);
         res.status(200).json({ message: 'Left room successfully' });
     } catch (error) {
         logger.error('Error leaving room:', error);
         res.status(500).json({ error: 'Failed to leave room' });
+    }
+};
+
+exports.markMessageAsRead = async (req, res) => {
+    try {
+        const { roomId, userId, messageId } = req.body;
+
+        if (!roomId || !userId || !messageId) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        const sanitizedUserId = sanitizeInput(userId);
+        const roomData = await db.get(`rooms.${roomId}`);
+        if (!roomData) {
+            return res.status(404).json({ error: 'Room not found' });
+        }
+
+        const room = JSON.parse(roomData);
+        if (!room.users.includes(sanitizedUserId)) {
+            return res.status(403).json({ error: 'User not in room' });
+        }
+
+        const messageIndex = room.messages.findIndex(msg => msg.id === messageId);
+        if (messageIndex === -1) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        if (!room.messages[messageIndex].readBy) {
+            room.messages[messageIndex].readBy = [];
+        }
+
+        if (!room.messages[messageIndex].readBy.includes(sanitizedUserId)) {
+            room.messages[messageIndex].readBy.push(sanitizedUserId);
+            await db.set(`rooms.${roomId}`, JSON.stringify(room));
+
+            global.io.to(roomId).emit('messageRead', {
+                messageId,
+                userId: sanitizedUserId,
+                readBy: room.messages[messageIndex].readBy
+            });
+        }
+
+        res.status(200).json({ message: 'Message marked as read' });
+    } catch (error) {
+        logger.error('Error marking message as read:', error);
+        res.status(500).json({ error: 'Failed to mark message as read' });
+    }
+};
+
+exports.reactToMessage = async (req, res) => {
+    try {
+        const { roomId, userId, messageId, emoji } = req.body;
+
+        if (!roomId || !userId || !messageId || !emoji) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        const sanitizedUserId = sanitizeInput(userId);
+        const roomData = await db.get(`rooms.${roomId}`);
+        if (!roomData) {
+            return res.status(404).json({ error: 'Room not found' });
+        }
+
+        const room = JSON.parse(roomData);
+        if (!room.users.includes(sanitizedUserId)) {
+            return res.status(403).json({ error: 'User not in room' });
+        }
+
+        const messageIndex = room.messages.findIndex(msg => msg.id === messageId);
+        if (messageIndex === -1) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+
+        if (!room.messages[messageIndex].reactions) {
+            room.messages[messageIndex].reactions = {};
+        }
+
+        if (!room.messages[messageIndex].reactions[emoji]) {
+            room.messages[messageIndex].reactions[emoji] = [];
+        }
+
+        const userReactionIndex = room.messages[messageIndex].reactions[emoji].indexOf(sanitizedUserId);
+        let action;
+
+        if (userReactionIndex === -1) {
+            room.messages[messageIndex].reactions[emoji].push(sanitizedUserId);
+            action = 'added';
+        } else {
+            room.messages[messageIndex].reactions[emoji].splice(userReactionIndex, 1);
+            if (room.messages[messageIndex].reactions[emoji].length === 0) {
+                delete room.messages[messageIndex].reactions[emoji];
+            }
+            action = 'removed';
+        }
+
+        await db.set(`rooms.${roomId}`, JSON.stringify(room));
+
+        global.io.to(roomId).emit('messageReaction', {
+            messageId,
+            userId: sanitizedUserId,
+            emoji,
+            action,
+            reactions: room.messages[messageIndex].reactions
+        });
+
+        res.status(200).json({ message: `Reaction ${action}` });
+    } catch (error) {
+        logger.error('Error reacting to message:', error);
+        res.status(500).json({ error: 'Failed to react to message' });
     }
 };
