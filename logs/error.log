@@ -1,2 +1,1 @@
-{"level":"error","message":"Error joining room: Cannot read properties of undefined (reading 'includes')","stack":"TypeError: Cannot read properties of undefined (reading 'includes')\n    at exports.joinRoom (/Users/fatih/Documents/Projeler/k9crypt-api/controllers/roomController.js:112:23)\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)","timestamp":"2024-11-28T17:39:11.650Z"}
-{"code":"ETIMEDOUT","errno":-60,"level":"error","message":"Error listing rooms: read ETIMEDOUT","stack":"Error: read ETIMEDOUT\n    at TCP.onStreamRead (node:internal/stream_base_commons:218:20)","syscall":"read","timestamp":"2024-12-01T12:18:13.243Z"}
+
