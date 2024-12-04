@@ -214,18 +214,16 @@ exports.getMessages = async (req, res) => {
 
         messages = messages.slice(-Math.min(parseInt(limit), 50));
 
-        const decryptedMessages = await Promise.all(
-            messages.map(async message => ({
-                id: message.id,
-                userId: message.userId,
-                message: await decrypt(message.message),
-                timestamp: message.timestamp,
-                readBy: message.readBy,
-                reactions: message.reactions
-            }))
-        );
+        const encryptedMessages = messages.map(message => ({
+            id: message.id,
+            userId: message.userId,
+            message: message.message,
+            timestamp: message.timestamp,
+            readBy: message.readBy,
+            reactions: message.reactions
+        }));
 
-        res.status(200).json({ messages: decryptedMessages });
+        res.status(200).json({ messages: encryptedMessages });
     } catch (error) {
         logger.error('Error getting messages:', error);
         res.status(500).json({ error: 'Failed to get messages' });
