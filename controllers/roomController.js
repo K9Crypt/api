@@ -7,7 +7,6 @@ const { rateLimit } = require('express-rate-limit');
 
 const ROOM_CONSTANTS = {
     MAX_USERS: 1000,
-    MIN_USERS: 2,
     MIN_PASSWORD_LENGTH: 6,
     ROOM_CODE_LENGTH: 20
 };
@@ -63,13 +62,7 @@ async function isRoomExists(roomId) {
 
 exports.createRoom = [limiter, async (req, res) => {
     try {
-        const { userId, type, password, capacity } = req.body;
-
-        if (!capacity || !Number.isInteger(Number(capacity)) || capacity < ROOM_CONSTANTS.MIN_USERS || capacity > ROOM_CONSTANTS.MAX_USERS) {
-            return res.status(400).json({
-                error: `Room capacity must be between ${ROOM_CONSTANTS.MIN_USERS} and ${ROOM_CONSTANTS.MAX_USERS}`
-            });
-        }
+        const { userId, type, password } = req.body;
 
         if (!validateRoomInput({ userId, type, password })) {
             return res.status(400).json({ error: 'Invalid input parameters' });
@@ -77,9 +70,7 @@ exports.createRoom = [limiter, async (req, res) => {
 
         const sanitizedUserId = sanitizeInput(userId);
         if (sanitizedUserId.toLowerCase() === "system" || sanitizedUserId.toLowerCase() === "k9crypt" || sanitizedUserId.toLowerCase() === "unoxdevs" || sanitizedUserId.toLowerCase() === "admin") {
-            return res.status(400).json({
-                error: "Username 'System', 'K9Crypt', 'UnoxDevs' and 'Admin' are not allowed"
-            });
+            return res.status(400).json({ error: "Username 'System', 'K9Crypt', 'UnoxDevs' and 'Admin' are not allowed" });
         }
 
         const roomId = await generateRoomCode();
@@ -88,7 +79,6 @@ exports.createRoom = [limiter, async (req, res) => {
             messages: [],
             typingUsers: [],
             type: type || 'public',
-            capacity: parseInt(capacity),
             createdAt: new Date().toISOString(),
             lastActivity: new Date().toISOString()
         };
@@ -103,7 +93,7 @@ exports.createRoom = [limiter, async (req, res) => {
         }
 
         await db.set(`rooms.${roomId}`, JSON.stringify(roomInfo));
-        logger.info(`Room created: ${roomId} with capacity: ${capacity}`);
+        logger.info(`Room created: ${roomId}`);
 
         res.status(201).json({ roomId });
     } catch (error) {
@@ -132,7 +122,7 @@ exports.joinRoom = [limiter, async (req, res) => {
 
         const room = JSON.parse(roomData);
 
-        if (room.users.length >= room.capacity) {
+        if (room.users.length >= ROOM_CONSTANTS.MAX_USERS) {
             return res.status(403).json({ error: 'Room is full' });
         }
 
@@ -162,7 +152,7 @@ exports.joinRoom = [limiter, async (req, res) => {
     }
 }];
 
-exports.sendMessage = [limiter, async (req, res) => {
+exports.sendMessage = async (req, res) => {
     try {
         const { roomId, userId, message } = req.body;
 
@@ -214,9 +204,9 @@ exports.sendMessage = [limiter, async (req, res) => {
         logger.error('Error sending message:', error);
         return res.status(500).json({ error: 'Message sending failed' });
     }
-}];
+};
 
-exports.getMessages = [limiter, async (req, res) => {
+exports.getMessages = async (req, res) => {
     try {
         const { roomId } = req.params;
         const { limit = 50, before } = req.query;
@@ -253,9 +243,9 @@ exports.getMessages = [limiter, async (req, res) => {
         logger.error('Error getting messages:', error);
         res.status(500).json({ error: 'Failed to get messages' });
     }
-}];
+};
 
-exports.listAllRooms = [limiter, async (req, res) => {
+exports.listAllRooms = async (req, res) => {
     try {
         const { type, minUsers, sort, page = 1, limit = 20 } = req.query;
 
@@ -328,9 +318,9 @@ exports.listAllRooms = [limiter, async (req, res) => {
         logger.error('Error listing rooms:', error);
         res.status(500).json({ error: 'Failed to list rooms. Please try again later.' });
     }
-}];
+};
 
-exports.checkRoom = [limiter, async (req, res) => {
+exports.checkRoom = async (req, res) => {
     try {
         const { roomId } = req.params;
 
@@ -350,10 +340,7 @@ exports.checkRoom = [limiter, async (req, res) => {
             messageCount: room.messages.length,
             createdAt: room.createdAt,
             lastActivity: room.lastActivity,
-            isEmpty: room.users.length <= 1,
-            capacity: room.capacity,
-            availableSlots: room.capacity - room.users.length,
-            isFull: room.users.length >= room.capacity
+            isEmpty: room.users.length <= 1
         };
 
         res.status(200).json({ room: safeRoom });
@@ -361,9 +348,9 @@ exports.checkRoom = [limiter, async (req, res) => {
         logger.error('Error checking room:', error);
         res.status(500).json({ error: 'Failed to check room' });
     }
-}];
+};
 
-exports.leaveRoom = [limiter, async (req, res) => {
+exports.leaveRoom = async (req, res) => {
     try {
         const { roomId, userId } = req.body;
 
@@ -419,9 +406,9 @@ exports.leaveRoom = [limiter, async (req, res) => {
         logger.error('Error leaving room:', error);
         res.status(500).json({ error: 'Failed to leave room' });
     }
-}];
+};
 
-exports.markMessageAsRead = [limiter, async (req, res) => {
+exports.markMessageAsRead = async (req, res) => {
     try {
         const { roomId, userId, messageId } = req.body;
 
@@ -465,9 +452,9 @@ exports.markMessageAsRead = [limiter, async (req, res) => {
         logger.error('Error marking message as read:', error);
         res.status(500).json({ error: 'Failed to mark message as read' });
     }
-}];
+};
 
-exports.reactToMessage = [limiter, async (req, res) => {
+exports.reactToMessage = async (req, res) => {
     try {
         const { roomId, userId, messageId, emoji } = req.body;
 
@@ -528,4 +515,4 @@ exports.reactToMessage = [limiter, async (req, res) => {
         logger.error('Error reacting to message:', error);
         res.status(500).json({ error: 'Failed to react to message' });
     }
-}];
+};
