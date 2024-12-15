@@ -7,6 +7,7 @@ const { rateLimit } = require('express-rate-limit');
 
 const ROOM_CONSTANTS = {
     MAX_USERS: 1000,
+    MIN_USERS: 2,
     MIN_PASSWORD_LENGTH: 6,
     ROOM_CODE_LENGTH: 20
 };
@@ -62,7 +63,13 @@ async function isRoomExists(roomId) {
 
 exports.createRoom = [limiter, async (req, res) => {
     try {
-        const { userId, type, password } = req.body;
+        const { userId, type, password, capacity } = req.body;
+
+        if (!capacity || !Number.isInteger(Number(capacity)) || capacity < ROOM_CONSTANTS.MIN_USERS || capacity > ROOM_CONSTANTS.MAX_USERS) {
+            return res.status(400).json({
+                error: `Room capacity must be between ${ROOM_CONSTANTS.MIN_USERS} and ${ROOM_CONSTANTS.MAX_USERS}`
+            });
+        }
 
         if (!validateRoomInput({ userId, type, password })) {
             return res.status(400).json({ error: 'Invalid input parameters' });
@@ -70,7 +77,9 @@ exports.createRoom = [limiter, async (req, res) => {
 
         const sanitizedUserId = sanitizeInput(userId);
         if (sanitizedUserId.toLowerCase() === "system" || sanitizedUserId.toLowerCase() === "k9crypt" || sanitizedUserId.toLowerCase() === "unoxdevs" || sanitizedUserId.toLowerCase() === "admin") {
-            return res.status(400).json({ error: "Username 'System', 'K9Crypt', 'UnoxDevs' and 'Admin' are not allowed" });
+            return res.status(400).json({
+                error: "Username 'System', 'K9Crypt', 'UnoxDevs' and 'Admin' are not allowed"
+            });
         }
 
         const roomId = await generateRoomCode();
@@ -79,6 +88,7 @@ exports.createRoom = [limiter, async (req, res) => {
             messages: [],
             typingUsers: [],
             type: type || 'public',
+            capacity: parseInt(capacity),
             createdAt: new Date().toISOString(),
             lastActivity: new Date().toISOString()
         };
@@ -93,7 +103,7 @@ exports.createRoom = [limiter, async (req, res) => {
         }
 
         await db.set(`rooms.${roomId}`, JSON.stringify(roomInfo));
-        logger.info(`Room created: ${roomId}`);
+        logger.info(`Room created: ${roomId} with capacity: ${capacity}`);
 
         res.status(201).json({ roomId });
     } catch (error) {
@@ -122,7 +132,7 @@ exports.joinRoom = [limiter, async (req, res) => {
 
         const room = JSON.parse(roomData);
 
-        if (room.users.length >= ROOM_CONSTANTS.MAX_USERS) {
+        if (room.users.length >= room.capacity) {
             return res.status(403).json({ error: 'Room is full' });
         }
 
