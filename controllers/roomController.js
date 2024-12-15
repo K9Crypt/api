@@ -350,7 +350,10 @@ exports.checkRoom = [limiter, async (req, res) => {
             messageCount: room.messages.length,
             createdAt: room.createdAt,
             lastActivity: room.lastActivity,
-            isEmpty: room.users.length <= 1
+            isEmpty: room.users.length <= 1,
+            capacity: room.capacity,
+            availableSlots: room.capacity - room.users.length,
+            isFull: room.users.length >= room.capacity
         };
 
         res.status(200).json({ room: safeRoom });
