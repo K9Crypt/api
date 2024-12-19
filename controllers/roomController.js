@@ -4,16 +4,29 @@ const { encrypt, decrypt } = require('../utils/encryption');
 const logger = require('../utils/logger');
 const { validateRoomInput, sanitizeInput } = require('../utils/validation');
 const { rateLimit } = require('express-rate-limit');
+const { blockedNames, religiousTerms } = require('../config/blockedNames');
 
 const ROOM_CONSTANTS = {
     MAX_USERS: 1000,
     MIN_PASSWORD_LENGTH: 6,
-    ROOM_CODE_LENGTH: 20
+    ROOM_CODE_LENGTH: 20,
+    MAX_MESSAGE_LENGTH: 2000,
+    ROOM_INACTIVE_TIMEOUT: 24 * 60 * 60 * 1000,
+    USERNAME_REGEX: /^[a-zA-Z0-9_-]{3,20}$/,
+    RESERVED_USERNAMES: [...blockedNames, ...religiousTerms],
 };
 
 const limiter = rateLimit({
     windowMs: 3 * 60 * 1000,
     max: 50,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+});
+
+const userLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000,
+    max: 20,
+    keyGenerator: (req) => req.body.userId || req.ip,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
 });
@@ -60,17 +73,42 @@ async function isRoomExists(roomId) {
     }
 }
 
-exports.createRoom = [limiter, async (req, res) => {
+async function cleanupInactiveRooms() {
+    try {
+        const rooms = await db.all();
+        const now = new Date().getTime();
+
+        for (const room of rooms) {
+            const roomData = JSON.parse(room.data);
+            const lastActivity = new Date(roomData.lastActivity).getTime();
+
+            if (now - lastActivity > ROOM_CONSTANTS.ROOM_INACTIVE_TIMEOUT) {
+                await db.delete(room.ID);
+                logger.info(`Inactive room deleted: ${room.ID}`);
+            }
+        }
+    } catch (error) {
+        logger.error('Error cleaning up inactive rooms:', error);
+    }
+}
+
+setInterval(cleanupInactiveRooms, 6 * 60 * 60 * 1000);
+
+exports.createRoom = [userLimiter, async (req, res) => {
     try {
         const { userId, type, password } = req.body;
 
-        if (!validateRoomInput({ userId, type, password })) {
-            return res.status(400).json({ error: 'Invalid input parameters' });
+        if (!ROOM_CONSTANTS.USERNAME_REGEX.test(userId)) {
+            return res.status(400).json({ error: 'Invalid username format' });
         }
 
-        const sanitizedUserId = sanitizeInput(userId);
-        if (sanitizedUserId.toLowerCase() === "system" || sanitizedUserId.toLowerCase() === "k9crypt" || sanitizedUserId.toLowerCase() === "unoxdevs" || sanitizedUserId.toLowerCase() === "admin") {
-            return res.status(400).json({ error: "Username 'System', 'K9Crypt', 'UnoxDevs' and 'Admin' are not allowed" });
+        const sanitizedUserId = sanitizeInput(userId).toLowerCase();
+        if (ROOM_CONSTANTS.RESERVED_USERNAMES.includes(sanitizedUserId)) {
+            return res.status(400).json({ error: 'This username is not allowed' });
+        }
+
+        if (!validateRoomInput({ userId, type, password })) {
+            return res.status(400).json({ error: 'Invalid input parameters' });
         }
 
         const roomId = await generateRoomCode();
@@ -152,12 +190,18 @@ exports.joinRoom = [limiter, async (req, res) => {
     }
 }];
 
-exports.sendMessage = async (req, res) => {
+exports.sendMessage = [userLimiter, async (req, res) => {
     try {
         const { roomId, userId, message } = req.body;
 
         if (!roomId || !userId || !message) {
             return res.status(400).json({ error: 'Missing required fields' });
+        }
+
+        if (!message || message.length > ROOM_CONSTANTS.MAX_MESSAGE_LENGTH) {
+            return res.status(400).json({ 
+                error: `Message must be between 1 and ${ROOM_CONSTANTS.MAX_MESSAGE_LENGTH} characters` 
+            });
         }
 
         const sanitizedUserId = sanitizeInput(userId);
@@ -199,12 +243,18 @@ exports.sendMessage = async (req, res) => {
             reactions: messageObj.reactions
         });
 
+        if (room.users.length <= 1) {
+            await db.delete(`rooms.${roomId}`);
+            logger.info(`Empty room deleted: ${roomId}`);
+            return res.status(404).json({ error: 'Room has been deleted due to inactivity' });
+        }
+
         return res.status(200).json({ message: 'Message sent successfully' });
     } catch (error) {
         logger.error('Error sending message:', error);
         return res.status(500).json({ error: 'Message sending failed' });
     }
-};
+}];
 
 exports.getMessages = async (req, res) => {
     try {
@@ -515,4 +565,23 @@ exports.reactToMessage = async (req, res) => {
         logger.error('Error reacting to message:', error);
         res.status(500).json({ error: 'Failed to react to message' });
     }
+};
+
+exports.errorHandler = (err, req, res, next) => {
+    logger.error('Unhandled error:', err);
+    res.status(500).json({ error: 'An unexpected error occurred' });
+};
+
+exports.validateUser = (req, res, next) => {
+    const userId = req.body.userId || req.query.userId;
+    
+    if (!userId || !ROOM_CONSTANTS.USERNAME_REGEX.test(userId)) {
+        return res.status(400).json({ error: 'Invalid username format' });
+    }
+
+    if (ROOM_CONSTANTS.RESERVED_USERNAMES.includes(userId.toLowerCase())) {
+        return res.status(400).json({ error: 'This username is not allowed' });
+    }
+
+    next();
 };
