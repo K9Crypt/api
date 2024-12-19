@@ -10,7 +10,6 @@ const ROOM_CONSTANTS = {
     MAX_USERS: 1000,
     MIN_PASSWORD_LENGTH: 6,
     ROOM_CODE_LENGTH: 20,
-    MAX_MESSAGE_LENGTH: 2000,
     ROOM_INACTIVE_TIMEOUT: 24 * 60 * 60 * 1000,
     USERNAME_REGEX: /^[a-zA-Z0-9_-]{3,20}$/,
     RESERVED_USERNAMES: [...blockedNames, ...religiousTerms],
@@ -196,12 +195,6 @@ exports.sendMessage = [userLimiter, async (req, res) => {
 
         if (!roomId || !userId || !message) {
             return res.status(400).json({ error: 'Missing required fields' });
-        }
-
-        if (!message || message.length > ROOM_CONSTANTS.MAX_MESSAGE_LENGTH) {
-            return res.status(400).json({ 
-                error: `Message must be between 1 and ${ROOM_CONSTANTS.MAX_MESSAGE_LENGTH} characters` 
-            });
         }
 
         const sanitizedUserId = sanitizeInput(userId);
