@@ -36,18 +36,13 @@ async function generateRoomCode() {
         let roomExists;
         let attempts = 0;
         const MAX_ATTEMPTS = 10;
-        const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
         do {
             if (attempts >= MAX_ATTEMPTS) {
                 throw new Error('Maximum room generation attempts exceeded');
             }
 
-            roomCode = Array(ROOM_CONSTANTS.ROOM_CODE_LENGTH)
-                .fill()
-                .map(() => characters.charAt(Math.floor(Math.random() * characters.length)))
-                .join('');
-
+            roomCode = uuidv4().substring(0, 32);
             roomExists = await isRoomExists(roomCode);
             attempts++;
         } while (roomExists);
@@ -95,7 +90,7 @@ setInterval(cleanupInactiveRooms, 6 * 60 * 60 * 1000);
 
 exports.createRoom = [userLimiter, async (req, res) => {
     try {
-        const { userId, type, password } = req.body;
+        const { userId, type, password, roomName } = req.body;
 
         if (!ROOM_CONSTANTS.USERNAME_REGEX.test(userId)) {
             return res.status(400).json({ error: 'Invalid username format' });
@@ -110,6 +105,12 @@ exports.createRoom = [userLimiter, async (req, res) => {
             return res.status(400).json({ error: 'Invalid input parameters' });
         }
 
+        if (!roomName || roomName.trim().length < 3 || roomName.trim().length > 50) {
+            return res.status(400).json({ error: 'Room name must be between 3 and 50 characters' });
+        }
+
+        const sanitizedRoomName = sanitizeInput(roomName);
+
         const roomId = await generateRoomCode();
         const roomInfo = {
             users: [sanitizedUserId, "System"],
@@ -117,7 +118,8 @@ exports.createRoom = [userLimiter, async (req, res) => {
             typingUsers: [],
             type: type || 'public',
             createdAt: new Date().toISOString(),
-            lastActivity: new Date().toISOString()
+            lastActivity: new Date().toISOString(),
+            roomName: sanitizedRoomName,
         };
 
         if (type === 'private') {
@@ -132,7 +134,7 @@ exports.createRoom = [userLimiter, async (req, res) => {
         await db.set(`rooms.${roomId}`, JSON.stringify(roomInfo));
         logger.info(`Room created: ${roomId}`);
 
-        res.status(201).json({ roomId });
+        res.status(201).json({ roomId, roomName: sanitizedRoomName });
     } catch (error) {
         logger.error('Error creating room:', error);
         res.status(500).json({ error: "Room creation failed" });
@@ -298,6 +300,7 @@ exports.listAllRooms = async (req, res) => {
             const roomData = JSON.parse(room.data);
             return {
                 id: room.ID.split('.')[1],
+                roomName: roomData.roomName,
                 type: roomData.type,
                 userCount: roomData.users.length,
                 messageCount: roomData.messages.length,
@@ -383,7 +386,8 @@ exports.checkRoom = async (req, res) => {
             messageCount: room.messages.length,
             createdAt: room.createdAt,
             lastActivity: room.lastActivity,
-            isEmpty: room.users.length <= 1
+            isEmpty: room.users.length <= 1,
+            roomName: room.roomName,
         };
 
         res.status(200).json({ room: safeRoom });
