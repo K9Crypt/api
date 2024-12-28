@@ -113,7 +113,7 @@ exports.createRoom = [userLimiter, async (req, res) => {
 
         const roomId = await generateRoomCode();
         const roomInfo = {
-            users: [sanitizedUserId, "System"],
+            users: ["System"],
             messages: [],
             typingUsers: [],
             type: type || 'public',
