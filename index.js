@@ -9,6 +9,7 @@ const roomRoutes = require('./routes/room');
 const createRoutes = require('./routes/create');
 const viewRoutes = require('./routes/view');
 const socketService = require('./services/socketService');
+const { initializeOfficialRoom } = require('./controllers/roomController');
 
 const app = express();
 const server = http.createServer(app);
@@ -40,6 +41,7 @@ socketService(io);
 
 server.listen(1573, () => {
     console.log('K9Crypt API listening on port 1573!');
+    initializeOfficialRoom();
     deleteMessages();
     scheduledTask.start();
 });

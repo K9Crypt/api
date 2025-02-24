@@ -19,7 +19,12 @@ const ROOM_CONSTANTS = {
         ONE_YEAR: 365 * 24 * 60 * 60 * 1000,
         PERMANENT: -1
     },
-    DEFAULT_CATEGORIES: ['general', 'software', 'chat', 'gaming', 'support', 'other']
+    DEFAULT_CATEGORIES: ['general', 'software', 'chat', 'gaming', 'support', 'other'],
+    OFFICIAL_ROOM: {
+        name: "K9Crypt Official",
+        id: "k9crypt",
+        verified: true
+    }
 };
 
 const limiter = rateLimit({
@@ -61,6 +66,34 @@ async function generateRoomCode() {
     }
 }
 
+async function initializeOfficialRoom() {
+    try {
+        const officialRoomData = {
+            users: ["System"],
+            owner: "K9Crypt",
+            messages: [],
+            typingUsers: [],
+            type: "public",
+            createdAt: new Date().toISOString(),
+            lastActivity: new Date().toISOString(),
+            roomName: ROOM_CONSTANTS.OFFICIAL_ROOM.name,
+            lifetime: ROOM_CONSTANTS.ROOM_LIFETIMES.PERMANENT,
+            expiresAt: null,
+            category: "official",
+            verified: true,
+            isOfficial: true
+        };
+
+        const exists = await db.get(`rooms.${ROOM_CONSTANTS.OFFICIAL_ROOM.id}`);
+        if (!exists) {
+            await db.set(`rooms.${ROOM_CONSTANTS.OFFICIAL_ROOM.id}`, JSON.stringify(officialRoomData));
+            logger.info('Official K9Crypt room initialized');
+        }
+    } catch (error) {
+        logger.error('Error initializing official room:', error);
+    }
+}
+
 async function isRoomExists(roomId) {
     try {
         if (!roomId || typeof roomId !== 'string') {
@@ -74,12 +107,36 @@ async function isRoomExists(roomId) {
     }
 }
 
+exports.initializeOfficialRoom = initializeOfficialRoom;
+
 exports.createRoom = [userLimiter, async (req, res) => {
     try {
-        const { userId, type, password, roomName, lifetime, category } = req.body;
+        const { userId, type, password, roomName, lifetime, category, customId } = req.body;
+        let finalRoomId;
 
         if (!userId || !ROOM_CONSTANTS.USERNAME_REGEX.test(userId)) {
             return res.status(400).json({ error: 'Invalid username format' });
+        }
+
+        if (roomName.toLowerCase() === ROOM_CONSTANTS.OFFICIAL_ROOM.name.toLowerCase()) {
+            return res.status(403).json({ error: 'This room name is reserved for official use' });
+        }
+
+        if (customId) {
+            const sanitizedCustomId = sanitizeInput(customId).toLowerCase();
+            
+            if (sanitizedCustomId === ROOM_CONSTANTS.OFFICIAL_ROOM.id) {
+                return res.status(403).json({ error: 'This room ID is reserved for official use' });
+            }
+
+            const roomExists = await isRoomExists(sanitizedCustomId);
+            if (roomExists) {
+                return res.status(400).json({ error: 'This room ID is already taken' });
+            }
+
+            finalRoomId = sanitizedCustomId;
+        } else {
+            finalRoomId = await generateRoomCode();
         }
 
         const sanitizedUserId = sanitizeInput(userId).toLowerCase();
@@ -105,7 +162,6 @@ exports.createRoom = [userLimiter, async (req, res) => {
 
         const sanitizedRoomName = sanitizeInput(roomName);
 
-        const roomId = await generateRoomCode();
         const roomInfo = {
             users: ["System"],
             owner: sanitizedUserId,
@@ -115,6 +171,7 @@ exports.createRoom = [userLimiter, async (req, res) => {
             createdAt: new Date().toISOString(),
             lastActivity: new Date().toISOString(),
             roomName: sanitizedRoomName,
+            roomId: finalRoomId,
             lifetime: parseInt(lifetime),
             expiresAt: lifetime === ROOM_CONSTANTS.ROOM_LIFETIMES.PERMANENT ? null : new Date(Date.now() + parseInt(lifetime)).toISOString(),
             category: category ? category.toLowerCase() : null
@@ -129,10 +186,15 @@ exports.createRoom = [userLimiter, async (req, res) => {
             roomInfo.password = await encrypt(password);
         }
 
-        await db.set(`rooms.${roomId}`, JSON.stringify(roomInfo));
-        logger.info(`Room ${roomId} created with lifetime: ${lifetime}`);
+        await db.set(`rooms.${finalRoomId}`, JSON.stringify(roomInfo));
+        logger.info(`Room ${finalRoomId} created with lifetime: ${lifetime}`);
 
-        res.status(201).json({ roomId, roomName: sanitizedRoomName, expiresAt: roomInfo.expiresAt, category: roomInfo.category });
+        res.status(201).json({ 
+            roomId: finalRoomId, 
+            roomName: sanitizedRoomName, 
+            expiresAt: roomInfo.expiresAt, 
+            category: roomInfo.category 
+        });
     } catch (error) {
         logger.error('Error creating room:', error);
         res.status(500).json({ error: 'Failed to create room' });
@@ -313,7 +375,9 @@ exports.listAllRooms = async (req, res) => {
                     isPermanent: roomData.lifetime === ROOM_CONSTANTS.ROOM_LIFETIMES.PERMANENT,
                     remainingTime: roomData.expiresAt ? Math.max(0, new Date(roomData.expiresAt).getTime() - Date.now()) : null,
                     owner: roomData.owner,
-                    category: roomData.category
+                    category: roomData.category,
+                    verified: roomData.verified || false,
+                    isOfficial: roomData.isOfficial || false
                 };
             } catch (parseError) {
                 logger.error(`Error parsing room data for room ID ${room.ID}:`, parseError);
