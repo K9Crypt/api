@@ -469,7 +469,8 @@ exports.checkRoom = async (req, res) => {
             isEmpty: room.users.length <= 1,
             roomName: room.roomName,
             owner: room.owner,
-            category: room.category
+            category: room.category,
+            users: room.users
         };
 
         res.status(200).json({ room: safeRoom });
